@@ -14,7 +14,7 @@ function Get-OpenVortexClickMethod([string]$Browser) {
 function Get-SupportedBrowserFromProgId([string]$ProgId) {
   switch -Regex ($ProgId) {
     '^ChromeHTML$' { return 'chrome' }
-    '^Opera(GX)?Stable$' { return 'opera' }
+    '^Opera( ?GX)?Stable$' { return 'opera' }
     default { return '' }
   }
 }

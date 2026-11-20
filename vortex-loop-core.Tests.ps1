@@ -13,6 +13,7 @@ Assert-Equal (Get-OpenVortexClickMethod 'chrome') 'mouse' 'use mouse-style click
 Assert-Equal (Get-OpenVortexClickMethod 'opera') 'invoke' 'preserve Opera confirmation invocation'
 Assert-Equal (Get-SupportedBrowserFromProgId 'ChromeHTML') 'chrome' 'recognize Chrome as the default browser'
 Assert-Equal (Get-SupportedBrowserFromProgId 'OperaStable') 'opera' 'recognize Opera as the default browser'
+Assert-Equal (Get-SupportedBrowserFromProgId 'Opera GXStable') 'opera' 'recognize the installed Opera GX default browser'
 Assert-Equal (Get-SupportedBrowserFromProgId 'OperaGXStable') 'opera' 'recognize Opera GX as the default browser'
 Assert-Equal (Get-SupportedBrowserFromProgId 'MSEdgeHTM') '' 'reject unsupported default browsers'
 Assert-Equal (Get-SupportedBrowserFromProgId '') '' 'reject unknown default browsers'
