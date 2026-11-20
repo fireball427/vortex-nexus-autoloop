@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'vortex-loop-core.ps1')
+. (Join-Path $PSScriptRoot 'vortex-mouse.ps1')
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 
@@ -61,6 +62,19 @@ function Invoke-UiButton($Button, [string]$Label) {
   Write-Host "Clicked: $Label"
 }
 
+function Invoke-BrowserManualMouseClick($Link, [IntPtr]$BrowserHandle) {
+  try {
+    if (-not $Link -or -not $Link.Current.IsEnabled -or $Link.Current.IsOffscreen -or $Link.Current.Name.Trim() -ne 'Start download manually') { return $false }
+    $rect = $Link.Current.BoundingRectangle
+  } catch { return $false }
+  if ($rect.IsEmpty -or $rect.Width -le 0 -or $rect.Height -le 0) { return $false }
+  $x = [int][Math]::Floor($rect.Left + $rect.Width / 2)
+  $y = [int][Math]::Floor($rect.Top + $rect.Height / 2)
+  Send-BackgroundMouseClick $BrowserHandle $x $y
+  Write-Host 'Sent browser mouse click: Start download manually (handoff not yet verified)'
+  return $true
+}
+
 function Get-VortexState {
   $app = Get-AppRoot 'Vortex'
   $elements = @(Get-Descendants $app.Root)
@@ -96,7 +110,7 @@ function Get-BrowserState {
   $elements = @(Get-Descendants $app.Root)
   $names = @($elements | ForEach-Object { Get-ElementName $_ })
   return [pscustomobject]@{
-    Root = $app.Root; Elements = $elements
+    Root = $app.Root; Elements = $elements; WindowHandle = $app.Process.MainWindowHandle
     Title = [string]$app.Process.MainWindowTitle
     SlowButton = Find-Button $elements 'Slow download'
     OpenButton = Find-Button $elements 'Open Vortex'
@@ -207,7 +221,10 @@ function Invoke-OneCycle {
       $clickCount = Get-ManualStartClickCount $linkAttempts
       Write-Host "Browser fallback attempt $linkAttempts of 3 ($clickCount clicks)"
       for ($clickIndex = 1; $clickIndex -le $clickCount; $clickIndex++) {
-        Invoke-UiButton $link 'Start download manually'
+        if (-not (Invoke-BrowserManualMouseClick $link $browserCheck.WindowHandle)) {
+          Write-Host 'Browser link changed; checking for handoff before any more clicks.'
+          break
+        }
       }
     } elseif ($action -eq 'retry-vortex-manual') {
       $vortexTried = $true
@@ -217,7 +234,9 @@ function Invoke-OneCycle {
     } elseif ($action -eq 'retry-browser-after-vortex') {
       $finalBrowserTried = $true
       Write-Host 'Final browser manual-download retry after Vortex retry.' -ForegroundColor Yellow
-      Invoke-UiButton $link 'Start download manually'
+      if (-not (Invoke-BrowserManualMouseClick $link $browserCheck.WindowHandle)) {
+        Write-Host 'Browser link changed; checking for handoff.'
+      }
     } else {
       throw "Handoff unverified for '$currentMod' ($action). No further retry; inspect Vortex and Opera."
     }
