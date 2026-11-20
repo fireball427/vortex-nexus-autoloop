@@ -11,8 +11,7 @@ This is a local PowerShell + Windows UI Automation script. It uses no LLM, API, 
 - Waits for Vortex to advance automatically or for **Open Vortex** to appear; it does not change the always-allow setting.
 - Verifies both a changed Vortex mod name and an increased collection queue counter after the handoff.
 - If the mod remains stalled, tries the browser's **Start download manually** link up to three times using mouse-style messages at its current on-screen position. The first attempt sends up to three rapid clicks; later attempts send one. If the link changes during those clicks, it stops clicking and checks for handoff. After those attempts it retries through Vortex once. If the mod still matches and the link is visible, it makes one final browser retry, then stops if progress is still unverified. Repeated clicks may create duplicate requests.
-- If the browser tab or Vortex state changes before the handoff can be verified, waits for the Vortex mod name and queue counter to advance without clicking the old tab, then stops if advancement remains unverified.
-- Stops rather than guessing if a control is missing, the page/mod names do not match before the initial download, or an unexpected login/CAPTCHA/error appears.
+- Stops rather than guessing if a control is missing, the page/mod names do not match, or an unexpected login/CAPTCHA/error appears.
 
 It does not click Premium, skip a mod, endorse, install, or change browser permissions.
 
@@ -51,4 +50,4 @@ Experimental: the loop has completed multiple real downloads, but can stop if br
 
 If Opera opens the correct mod page but the script cannot detect **Slow download**, try restarting Opera, then inspect the current Vortex and browser state before starting the script again. A restart restored the controls in one observed case; it may not fix every cause.
 
-Run the name-matching and retry-policy tests with `.\vortex-loop-core.Tests.ps1`, and the simulated handoff tests with `.\vortex-handoff.Tests.ps1`. Run `.\vortex-mouse.Tests.ps1` to test mouse-message delivery to a local test window (the window briefly appears). These tests do not prove that Nexus accepted a download.
+Run the name-matching and retry-policy tests with `.\vortex-loop-core.Tests.ps1`. Run `.\vortex-mouse.Tests.ps1` to test mouse-message delivery to a local test window (the window briefly appears). These tests do not prove that Nexus accepted a download.
