@@ -5,6 +5,22 @@ function Assert-Equal($actual, $expected, $label) {
   Write-Output "PASS: $label"
 }
 
+$windows = @([pscustomobject]@{ Title = 'Example Nexus - Google Chrome'; Handle = 1 }, [pscustomobject]@{ Title = 'Unrelated - Google Chrome'; Handle = 2 })
+Assert-Equal (Get-PreferredBrowserWindow $windows).Handle 1 'select the unique Nexus browser window'
+Assert-Equal ($null -eq (Get-PreferredBrowserWindow @([pscustomobject]@{ Title = 'One Nexus'; Handle = 1 }, [pscustomobject]@{ Title = 'Two Nexus'; Handle = 2 }))) $true 'reject ambiguous Nexus windows'
+Assert-Equal ($null -eq (Get-PreferredBrowserWindow @([pscustomobject]@{ Title = 'One'; Handle = 1 }, [pscustomobject]@{ Title = 'Two'; Handle = 2 }))) $true 'reject ambiguous non-Nexus windows'
+Assert-Equal (Get-OpenVortexClickMethod 'chrome') 'mouse' 'use mouse-style click for Chrome confirmation'
+Assert-Equal (Get-OpenVortexClickMethod 'opera') 'invoke' 'preserve Opera confirmation invocation'
+Assert-Equal (Get-SupportedBrowserFromProgId 'ChromeHTML') 'chrome' 'recognize Chrome as the default browser'
+Assert-Equal (Get-SupportedBrowserFromProgId 'OperaStable') 'opera' 'recognize Opera as the default browser'
+Assert-Equal (Get-SupportedBrowserFromProgId 'OperaGXStable') 'opera' 'recognize Opera GX as the default browser'
+Assert-Equal (Get-SupportedBrowserFromProgId 'MSEdgeHTM') '' 'reject unsupported default browsers'
+Assert-Equal (Get-SupportedBrowserFromProgId '') '' 'reject unknown default browsers'
+Assert-Equal (Test-VerifiedAdvance 'Example Mod A' '210/364' 'Example Mod B' '211/364') $true 'verify changed mod and increased counter'
+Assert-Equal (Test-VerifiedAdvance 'Example Mod A' '210/364' 'Free' '') $false 'reject transient text with no counter'
+Assert-Equal (Test-VerifiedAdvance 'Example Mod A' '210/364' 'Example Mod B' '210/364') $false 'reject changed name without counter advancement'
+Assert-Equal (Test-VerifiedAdvance 'Example Mod A' '210/364' 'Loading...' '211/364') $false 'reject loading state as next mod'
+Assert-Equal (Test-VerifiedAdvance 'Example Mod A' '210/364' 'Example Mod B' '211/400') $false 'reject changed collection total'
 Assert-Equal (Test-TitleContainsModName 'Example Mod A' 'Example Mod A at Cyberpunk 2077 Nexus - Mods and community - Opera') $true 'matching Vortex/browser mod names'
 Assert-Equal (Test-TitleContainsModName 'Example Mod A' 'Example Mod B at Cyberpunk 2077 Nexus - Opera') $false 'reject mismatched mod names'
 Assert-Equal (Test-NextModChanged 'Example Mod A' 'Example Mod A') $false 'do not advance on identical names'

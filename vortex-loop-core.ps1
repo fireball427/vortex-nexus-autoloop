@@ -1,3 +1,24 @@
+function Get-PreferredBrowserWindow([object[]]$Windows) {
+  $nexus = @($Windows | Where-Object { $_.Title -match '(?i)\bnexus\b' })
+  if ($nexus.Count -eq 1) { return $nexus[0] }
+  if ($nexus.Count -gt 1) { return $null }
+  if ($Windows.Count -eq 1) { return $Windows[0] }
+  return $null
+}
+
+function Get-OpenVortexClickMethod([string]$Browser) {
+  if ($Browser -eq 'chrome') { return 'mouse' }
+  return 'invoke'
+}
+
+function Get-SupportedBrowserFromProgId([string]$ProgId) {
+  switch -Regex ($ProgId) {
+    '^ChromeHTML$' { return 'chrome' }
+    '^Opera(GX)?Stable$' { return 'opera' }
+    default { return '' }
+  }
+}
+
 function ConvertTo-NormalizedModName([string]$Name) {
   if ([string]::IsNullOrWhiteSpace($Name)) { return '' }
   $value = $Name.ToLowerInvariant()
@@ -19,6 +40,16 @@ function Test-NextModChanged([string]$PreviousMod, [string]$CurrentMod) {
   $current = ConvertTo-NormalizedModName $CurrentMod
   if (!$previous -or !$current) { return $false }
   return $previous -ne $current
+}
+
+function Test-VerifiedAdvance([string]$PreviousMod, [string]$PreviousCounter, [string]$CurrentMod, [string]$CurrentCounter) {
+  if (-not (Test-NextModChanged $PreviousMod $CurrentMod)) { return $false }
+  if ($CurrentMod.Trim() -match '^(?i:loading\s*\.{0,3}|free)$') { return $false }
+  if ($PreviousCounter -notmatch '^\s*(\d+)\s*/\s*(\d+)\s*$') { return $false }
+  $previousNumber = [int]$Matches[1]; $previousTotal = [int]$Matches[2]
+  if ($CurrentCounter -notmatch '^\s*(\d+)\s*/\s*(\d+)\s*$') { return $false }
+  $currentNumber = [int]$Matches[1]; $currentTotal = [int]$Matches[2]
+  return ($previousTotal -eq $currentTotal -and $previousNumber -ge 1 -and $currentNumber -le $currentTotal -and $currentNumber -gt $previousNumber)
 }
 
 function Get-ManualStartClickCount([int]$Attempt) {

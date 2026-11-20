@@ -12,10 +12,11 @@ Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 
 function Get-AppRoot([string]$ProcessName) {
-  $process = Get-Process -Name $ProcessName -ErrorAction SilentlyContinue |
-    Where-Object { $_.MainWindowHandle -ne 0 } |
-    Select-Object -First 1
-  if (-not $process) { throw "Can't find a visible $ProcessName window. Open Vortex and Opera first." }
+  $processes = @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue |
+    Where-Object { $_.MainWindowHandle -ne 0 })
+  if ($processes.Count -eq 0) { throw "Can't find a visible $ProcessName window. Open Vortex and your default supported browser first." }
+  if ($processes.Count -gt 1) { throw "Multiple visible $ProcessName processes found. Close extra browser windows and try again." }
+  $process = $processes[0]
   $element = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$process.MainWindowHandle)
   if (-not $element) { throw "Couldn't attach to the $ProcessName window." }
   return [pscustomobject]@{ Process = $process; Root = $element }
@@ -105,13 +106,43 @@ function Get-VortexState {
   }
 }
 
+function Get-DefaultSupportedBrowser {
+  $key = 'HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice'
+  $choice = Get-ItemProperty -Path $key -Name ProgId -ErrorAction SilentlyContinue
+  $browser = Get-SupportedBrowserFromProgId $choice.ProgId
+  if (-not $browser) { throw "The default HTTPS browser is unsupported or unknown (ProgId: '$($choice.ProgId)'). Set Chrome or Opera as the default and open it before running." }
+  return $browser
+}
+
+function Get-BrowserWindow([string]$ProcessName) {
+  $desktop = [System.Windows.Automation.AutomationElement]::RootElement
+  $topWindows = $desktop.FindAll([System.Windows.Automation.TreeScope]::Children, [System.Windows.Automation.Condition]::TrueCondition)
+  $windows = @(foreach ($window in $topWindows) {
+    try {
+      $owner = Get-Process -Id $window.Current.ProcessId -ErrorAction SilentlyContinue
+      if ($owner -and $owner.ProcessName -eq $ProcessName -and $window.Current.ControlType.ProgrammaticName -eq 'ControlType.Window' -and -not $window.Current.IsOffscreen -and $window.Current.NativeWindowHandle -ne 0 -and $window.Current.Name) {
+        [pscustomobject]@{ Title = [string]$window.Current.Name; Handle = [IntPtr]$window.Current.NativeWindowHandle; Root = $window }
+      }
+    } catch {}
+  })
+  if ($script:browserHandle -ne [IntPtr]::Zero) {
+    $selected = @($windows | Where-Object { $_.Handle -eq $script:browserHandle }) | Select-Object -First 1
+  } else {
+    $selected = Get-PreferredBrowserWindow $windows
+  }
+  if (-not $selected) { throw "Cannot uniquely select an open $ProcessName window. Keep one Nexus page active in only one $ProcessName window, then retry." }
+  $script:browserHandle = $selected.Handle
+  return $selected
+}
+
 function Get-BrowserState {
-  $app = Get-AppRoot 'opera'
+  if ((Get-DefaultSupportedBrowser) -ne $script:browserName) { throw 'The default browser changed during the run; stopping.' }
+  $app = Get-BrowserWindow $script:browserName
   $elements = @(Get-Descendants $app.Root)
   $names = @($elements | ForEach-Object { Get-ElementName $_ })
   return [pscustomobject]@{
-    Root = $app.Root; Elements = $elements; WindowHandle = $app.Process.MainWindowHandle
-    Title = [string]$app.Process.MainWindowTitle
+    Root = $app.Root; Elements = $elements; WindowHandle = $app.Handle
+    Title = $app.Title
     SlowButton = Find-Button $elements 'Slow download'
     OpenButton = Find-Button $elements 'Open Vortex'
     Names = $names
@@ -143,12 +174,14 @@ function Find-OpenVortexButton {
   $browser = Get-BrowserState
   if ($browser.OpenButton) { return $browser.OpenButton }
 
-  # The external-app confirmation may be a separate top-level window, not a child of Opera.
+  # The external-app confirmation may be a separate browser-owned top-level window.
   $desktop = [System.Windows.Automation.AutomationElement]::RootElement
   $topWindows = $desktop.FindAll([System.Windows.Automation.TreeScope]::Children,
     [System.Windows.Automation.Condition]::TrueCondition)
   foreach ($window in $topWindows) {
     try {
+      $owner = Get-Process -Id $window.Current.ProcessId -ErrorAction SilentlyContinue
+      if (-not $owner -or $owner.ProcessName -ne $script:browserName) { continue }
       $button = Find-Button @(Get-Descendants $window) 'Open Vortex'
       if ($button) { return $button }
     } catch {}
@@ -156,11 +189,11 @@ function Find-OpenVortexButton {
   return $null
 }
 
-function Wait-ForHandoff([string]$PreviousMod, [int]$Seconds) {
+function Wait-ForHandoff([string]$PreviousMod, [string]$PreviousCounter, [int]$Seconds) {
   $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
   while ([DateTime]::UtcNow -lt $deadline) {
     $state = Get-VortexState
-    if ($state.ManualButton -and (Test-NextModChanged $PreviousMod $state.ModName)) {
+    if ($state.ManualButton -and (Test-VerifiedAdvance $PreviousMod $PreviousCounter $state.ModName $state.Counter)) {
       return [pscustomobject]@{ Kind = 'advanced'; Value = $state }
     }
     $button = Find-OpenVortexButton
@@ -171,11 +204,11 @@ function Wait-ForHandoff([string]$PreviousMod, [int]$Seconds) {
   return [pscustomobject]@{ Kind = 'timeout'; Value = $null }
 }
 
-function Wait-ForNextMod([string]$PreviousMod, [int]$Seconds) {
+function Wait-ForNextMod([string]$PreviousMod, [string]$PreviousCounter, [int]$Seconds) {
   $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
   while ([DateTime]::UtcNow -lt $deadline) {
     $state = Get-VortexState
-    if ($state.ManualButton -and $state.ModName -and (Test-NextModChanged $PreviousMod $state.ModName)) {
+    if ($state.ManualButton -and (Test-VerifiedAdvance $PreviousMod $PreviousCounter $state.ModName $state.Counter)) {
       return $state
     }
     Start-Sleep -Milliseconds 500
@@ -191,7 +224,9 @@ function Invoke-OneCycle {
   }
   if (-not $vortex.ModName) { throw 'Vortex showed the manual-download button but its mod name could not be read; stopping safely.' }
 
+  if ($vortex.Counter -notmatch '^\s*\d+\s*/\s*\d+\s*$') { throw 'Vortex queue counter could not be read; stopping before clicking.' }
   $currentMod = $vortex.ModName
+  $currentCounter = $vortex.Counter
   Write-Host "Vortex current item [$($vortex.Counter)]: $currentMod"
   Invoke-UiButton $vortex.ManualButton 'Download manually'
 
@@ -199,13 +234,13 @@ function Invoke-OneCycle {
   Write-Host "Verified same mod in browser: $($browser.Title)"
   Invoke-UiButton $browser.SlowButton 'Slow download'
 
-  $result = Wait-ForHandoff $currentMod 8
+  $result = Wait-ForHandoff $currentMod $currentCounter 8
   $linkAttempts = 0
   $vortexTried = $false
   $finalBrowserTried = $false
   while ($result.Kind -eq 'timeout') {
     $vortexCheck = Get-VortexState
-    if ($vortexCheck.ManualButton -and (Test-NextModChanged $currentMod $vortexCheck.ModName)) {
+    if ($vortexCheck.ManualButton -and (Test-VerifiedAdvance $currentMod $currentCounter $vortexCheck.ModName $vortexCheck.Counter)) {
       $result = [pscustomobject]@{ Kind = 'advanced'; Value = $vortexCheck }
       break
     }
@@ -240,14 +275,24 @@ function Invoke-OneCycle {
     } else {
       throw "Handoff unverified for '$currentMod' ($action). No further retry; inspect Vortex and Opera."
     }
-    $result = Wait-ForHandoff $currentMod 8
+    $result = Wait-ForHandoff $currentMod $currentCounter 8
   }
   if ($result.Kind -eq 'prompt') {
     # The user requested Open Vortex; do not change the permanent permission checkbox.
-    Invoke-UiButton $result.Value 'Open Vortex'
-    $next = Wait-ForNextMod $currentMod $TimeoutSeconds
+    if ((Get-OpenVortexClickMethod $script:browserName) -eq 'mouse') {
+      $button = $result.Value
+      if (-not $button.Current.IsEnabled -or $button.Current.IsOffscreen -or $button.Current.Name -ne 'Open Vortex') { throw 'Chrome Open Vortex prompt changed; stopping.' }
+      $rect = $button.Current.BoundingRectangle
+      if ($rect.IsEmpty -or $rect.Width -le 0 -or $rect.Height -le 0) { throw 'Chrome Open Vortex prompt has no usable bounds; stopping.' }
+      $browser = Get-BrowserState
+      Send-BackgroundMouseClick $browser.WindowHandle ([int][Math]::Floor($rect.Left + $rect.Width / 2)) ([int][Math]::Floor($rect.Top + $rect.Height / 2))
+      Write-Host 'Sent browser mouse click: Open Vortex (handoff not yet verified)'
+    } else {
+      Invoke-UiButton $result.Value 'Open Vortex'
+    }
+    $next = Wait-ForNextMod $currentMod $currentCounter $TimeoutSeconds
   } else { $next = $result.Value }
-  if (-not ($next.ManualButton -and $next.ModName -and (Test-NextModChanged $currentMod $next.ModName))) {
+  if (-not ($next.ManualButton -and (Test-VerifiedAdvance $currentMod $currentCounter $next.ModName $next.Counter))) {
     throw "Handoff unverified: Vortex did not advance from '$currentMod'. Stopping."
   }
   Write-Host "Verified Vortex advanced from '$currentMod' to [$($next.Counter)] '$($next.ModName)'." -ForegroundColor Green
@@ -255,6 +300,10 @@ function Invoke-OneCycle {
 }
 
 try {
+  if ($Once -and $Run) { throw 'Choose either -Once or -Run, not both.' }
+  $script:browserName = Get-DefaultSupportedBrowser
+  $script:browserHandle = [IntPtr]::Zero
+  Write-Host "Detected default browser: $script:browserName"
   $initialVortex = Get-VortexState
   $initialBrowser = Get-BrowserState
   Write-Host "Vortex: $($initialVortex.ModName) [$($initialVortex.Counter)]"
@@ -263,7 +312,6 @@ try {
     Write-Host 'Inspection only; no clicks made. Use -Once for one item or -Run to continue until the Vortex manual-download dialog disappears.' -ForegroundColor Cyan
     exit 0
   }
-  if ($Once -and $Run) { throw 'Choose either -Once or -Run, not both.' }
 
   $completed = 0
   do {
