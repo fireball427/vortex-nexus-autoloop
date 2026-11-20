@@ -55,9 +55,9 @@ Press **Ctrl+C** to stop a continuous run. Some waits use `-TimeoutSeconds` (90 
 
 This mode clicks **Skip mod** after detecting the Nexus countdown, without waiting for it to finish or clicking **Open Vortex**. If the browser click cannot be verified, the script asks you to check it manually. It never skips on an unconfirmed browser action.
 
-- **New mod name:** Start the next item with **Download manually**, even if the queue counter is unchanged. The counter is informational in this mode.
-- **Same mod name:** After up to 10 seconds, retry **Download manually** once if it is available. If the retry still stalls and **Skip mod** is available, the script offers a manual click. It does not send automated retries indefinitely.
-- **No manual-download dialog:** A confirmed absence ends `-Run` normally, regardless of the last counter. A temporarily disabled button is not completion. If an error prevents progress, `-Run` pauses so you can inspect the apps and recheck the queue or stop.
+- **New mod name:** Start the next item with **Download manually**, even if the queue counter is unchanged.
+- **Same mod name and counter:** After up to 10 seconds, retry **Download manually** once if both controls are available. If the retry still stalls on the same item, the script offers one manual **Skip mod** click.
+- **Stopping:** The script stops if there is no **Download manually** button at the start of a cycle or if it confirms the final dialog closed. Unresolved errors stop skip mode rather than restarting it.
 
 Queue progress or closure does not prove that the archive finished downloading or the mod installed.
 

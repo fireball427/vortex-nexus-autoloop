@@ -14,7 +14,7 @@ function Get-VortexState {
     if ($script:loadingAfterSkip) { return [pscustomobject]@{ ManualButton = 'manual'; ModName = 'Loading...'; Counter = '2/4' } }
     if ($script:skipDisappeared) { return [pscustomobject]@{ ManualButton = 'manual'; ModName = 'Test Mod'; Counter = '1/4' } }
     if (-not $script:skipIgnored -or $script:manualSkipDone -or ($script:retryWorks -and $script:skipAttempts -ge 2)) {
-      if ($script:finalItem -or $script:dialogGone) { return [pscustomobject]@{ ManualButton = $null; ModName = ''; Counter = '' } }
+      if ($script:finalItem) { return [pscustomobject]@{ ManualButton = $null; ModName = ''; Counter = '' } }
       return [pscustomobject]@{ ManualButton = 'manual'; ModName = 'Next Mod'; Counter = '2/4' }
     }
   }
@@ -54,7 +54,7 @@ function Reset-Test {
   $script:clicks = New-Object 'System.Collections.Generic.List[string]'
   $script:silent = $script:manualConfirmed = $script:allowManual = $script:asked = $script:wrongMod = $script:interrupted = $script:finalItem = $script:stale = $false
   $script:skipIgnored = $script:allowManualSkip = $script:manualSkipDone = $script:skipAsked = $script:cancelSkip = $script:changedAfterSkip = $script:skipDisappeared = $false
-  $script:counterOnly = $script:loadingAfterSkip = $script:retryWorks = $script:dialogGone = $false
+  $script:counterOnly = $script:loadingAfterSkip = $script:retryWorks = $false
   $script:skipAttempts = 0
 }
 function Assert-Failure([string]$Pattern) {
@@ -103,12 +103,6 @@ if (Invoke-OneCycle) { throw 'Expected terminal queue result' }
 Assert-Clicks 'Download manually, Slow download, Skip mod'
 'PASS: final dialog closing ends the loop without claiming download completion'
 
-Reset-Test
-$script:dialogGone = $true
-if (Invoke-OneCycle) { throw 'Expected no-button completion even below the total' }
-Assert-Clicks 'Download manually, Slow download, Skip mod'
-'PASS: missing manual-download dialog ends the loop regardless of counter'
-
 # Collapse the observation window; each mock returns a deterministic state.
 $TimeoutSeconds = 0
 $retryClicks = 'Download manually, Slow download, Skip mod, Download manually, Slow download, Skip mod'
@@ -139,15 +133,14 @@ foreach ($scenario in @('cancel', 'unchanged', 'counter-only', 'loading', 'missi
   $script:skipDisappeared = $scenario -eq 'missing'
   $pattern = switch ($scenario) {
     'cancel' { '*cancelled*' }
-    { $_ -in @('unchanged', 'counter-only') } { '*advancement was not verified*' }
-    'missing' { '*Cannot find a unique, visible Skip mod*' }
+    'unchanged' { '*advancement was not verified*' }
     default { '*not safe to request*' }
   }
   try { $null = Invoke-OneCycle; throw 'Expected cycle to stop' }
   catch { if ($_.Exception.Message -notlike $pattern) { throw } }
-  $manualFallback = $scenario -in @('cancel', 'unchanged', 'counter-only')
+  $manualFallback = $scenario -in @('cancel', 'unchanged')
   if ([bool]$script:skipAsked -ne $manualFallback) { throw "Unexpected prompt state: $scenario" }
-  $expectedClicks = if ($manualFallback) { $retryClicks } elseif ($scenario -eq 'missing') { 'Download manually, Slow download, Skip mod, Download manually, Slow download' } else { 'Download manually, Slow download, Skip mod' }
+  $expectedClicks = if ($manualFallback) { $retryClicks } else { 'Download manually, Slow download, Skip mod' }
   Assert-Clicks $expectedClicks
   "PASS: bounded Skip recovery stops when state is $scenario"
 }
