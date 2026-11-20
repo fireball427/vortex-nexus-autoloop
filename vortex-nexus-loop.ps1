@@ -251,7 +251,15 @@ function Invoke-OneCycle {
     $link = Find-Link $browserCheck.Elements 'Start download manually'
     $namesMatch = Test-ShouldRetryManual $currentMod $vortexCheck.ModName $browserCheck.Title $false
     $action = Get-HandoffRetryAction $namesMatch ($null -ne $link) $linkAttempts $vortexTried $finalBrowserTried
-    if ($action -eq 'click-start-download-manually') {
+    if ($action -eq 'stop-name-mismatch') {
+      Write-Host "Browser or Vortex state changed; waiting up to $TimeoutSeconds seconds for verified Vortex advancement without clicking." -ForegroundColor Yellow
+      $next = Wait-ForNextMod $currentMod $currentCounter $TimeoutSeconds
+      if ($next.ManualButton -and (Test-VerifiedAdvance $currentMod $currentCounter $next.ModName $next.Counter)) {
+        $result = [pscustomobject]@{ Kind = 'advanced'; Value = $next }
+        break
+      }
+      throw "Handoff unverified for '$currentMod' after waiting for Vortex. No further retry; inspect Vortex and the browser."
+    } elseif ($action -eq 'click-start-download-manually') {
       $linkAttempts++
       $clickCount = Get-ManualStartClickCount $linkAttempts
       Write-Host "Browser fallback attempt $linkAttempts of 3 ($clickCount clicks)"
