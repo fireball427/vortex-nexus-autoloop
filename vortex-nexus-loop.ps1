@@ -203,8 +203,11 @@ function Invoke-OneCycle {
     $action = Get-HandoffRetryAction $namesMatch ($null -ne $link) $linkAttempts $vortexTried
     if ($action -eq 'click-start-download-manually') {
       $linkAttempts++
-      Write-Host "Browser fallback attempt $linkAttempts of 3"
-      Invoke-UiButton $link 'Start download manually'
+      $clickCount = Get-ManualStartClickCount $linkAttempts
+      Write-Host "Browser fallback attempt $linkAttempts of 3 ($clickCount clicks)"
+      for ($clickIndex = 1; $clickIndex -le $clickCount; $clickIndex++) {
+        Invoke-UiButton $link 'Start download manually'
+      }
     } elseif ($action -eq 'retry-vortex-manual') {
       $vortexTried = $true
       Invoke-UiButton $vortexCheck.ManualButton 'Download manually'

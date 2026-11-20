@@ -21,6 +21,11 @@ function Test-NextModChanged([string]$PreviousMod, [string]$CurrentMod) {
   return $previous -ne $current
 }
 
+function Get-ManualStartClickCount([int]$Attempt) {
+  if ($Attempt -eq 1) { return 3 }
+  return 1
+}
+
 function Get-HandoffRetryAction([bool]$NamesMatch, [bool]$LinkVisible, [int]$LinkAttempts, [bool]$VortexTried) {
   if (-not $NamesMatch) { return 'stop-name-mismatch' }
   if ($LinkVisible -and $LinkAttempts -lt 3 -and -not $VortexTried) { return 'click-start-download-manually' }

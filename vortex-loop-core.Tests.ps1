@@ -9,6 +9,8 @@ Assert-Equal (Test-TitleContainsModName 'Kiroshi Optics Night Vision Mod' 'Kiros
 Assert-Equal (Test-TitleContainsModName 'Kiroshi Optics Night Vision Mod' 'Accidental fast travel bug fix at Cyberpunk 2077 Nexus - Opera') $false 'reject mismatched mod names'
 Assert-Equal (Test-NextModChanged 'Kiroshi Optics Night Vision Mod' 'Kiroshi Optics Night Vision Mod') $false 'do not advance on identical names'
 Assert-Equal (Test-NextModChanged 'Kiroshi Optics Night Vision Mod' 'Letter of the Law - Cyberpsycho Quest Fix') $true 'accept next item only when the name changes'
+Assert-Equal (Get-ManualStartClickCount 1) 3 'first manual-start fallback uses three clicks'
+Assert-Equal (Get-ManualStartClickCount 2) 1 'later manual-start fallbacks use one click'
 Assert-Equal (Get-HandoffRetryAction $true $true 0 $false) 'click-start-download-manually' 'prefer the browser manual-download link when names still match'
 Assert-Equal (Get-HandoffRetryAction $true $true 2 $false) 'click-start-download-manually' 'allow a third browser attempt'
 Assert-Equal (Get-HandoffRetryAction $true $true 3 $false) 'retry-vortex-manual' 'retry Vortex after three browser attempts'
