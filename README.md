@@ -9,7 +9,7 @@ This is a local PowerShell + Windows UI Automation script. It uses no LLM, API, 
 - Waits until the active Opera page title matches that mod, then clicks only **Slow download**.
 - Waits for Vortex to advance automatically or for **Open Vortex** to appear; it does not change the always-allow setting.
 - Verifies the Vortex mod name changed after the handoff.
-- If the mod remains stalled, tries the browser's **Start download manually** link up to three times (the first attempt invokes the link three times in quick succession; later attempts once) and retries through Vortex once; it stops if progress is still unverified. Rapid repeated clicks may create duplicate requests.
+- If the mod remains stalled, tries the browser's **Start download manually** link up to three times (the first attempt invokes the link three times in quick succession; later attempts once) and retries through Vortex once. If the mod still matches and the link is visible, it makes one final browser retry, then stops if progress is still unverified. Rapid repeated clicks may create duplicate requests.
 - Stops rather than guessing if a control is missing, the page/mod names do not match, or an unexpected login/CAPTCHA/error appears.
 
 It does not click Premium, skip a mod, endorse, install, or change browser permissions.

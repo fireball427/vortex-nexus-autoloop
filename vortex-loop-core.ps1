@@ -26,10 +26,11 @@ function Get-ManualStartClickCount([int]$Attempt) {
   return 1
 }
 
-function Get-HandoffRetryAction([bool]$NamesMatch, [bool]$LinkVisible, [int]$LinkAttempts, [bool]$VortexTried) {
+function Get-HandoffRetryAction([bool]$NamesMatch, [bool]$LinkVisible, [int]$LinkAttempts, [bool]$VortexTried, [bool]$FinalBrowserTried = $false) {
   if (-not $NamesMatch) { return 'stop-name-mismatch' }
   if ($LinkVisible -and $LinkAttempts -lt 3 -and -not $VortexTried) { return 'click-start-download-manually' }
   if (-not $VortexTried) { return 'retry-vortex-manual' }
+  if ($LinkVisible -and -not $FinalBrowserTried) { return 'retry-browser-after-vortex' }
   return 'stop'
 }
 

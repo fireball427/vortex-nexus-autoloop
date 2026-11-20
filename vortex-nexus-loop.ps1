@@ -188,6 +188,7 @@ function Invoke-OneCycle {
   $result = Wait-ForHandoff $currentMod 8
   $linkAttempts = 0
   $vortexTried = $false
+  $finalBrowserTried = $false
   while ($result.Kind -eq 'timeout') {
     $vortexCheck = Get-VortexState
     if ($vortexCheck.ManualButton -and (Test-NextModChanged $currentMod $vortexCheck.ModName)) {
@@ -200,7 +201,7 @@ function Invoke-OneCycle {
     Assert-NoInterruption $browserCheck
     $link = Find-Link $browserCheck.Elements 'Start download manually'
     $namesMatch = Test-ShouldRetryManual $currentMod $vortexCheck.ModName $browserCheck.Title $false
-    $action = Get-HandoffRetryAction $namesMatch ($null -ne $link) $linkAttempts $vortexTried
+    $action = Get-HandoffRetryAction $namesMatch ($null -ne $link) $linkAttempts $vortexTried $finalBrowserTried
     if ($action -eq 'click-start-download-manually') {
       $linkAttempts++
       $clickCount = Get-ManualStartClickCount $linkAttempts
@@ -213,6 +214,10 @@ function Invoke-OneCycle {
       Invoke-UiButton $vortexCheck.ManualButton 'Download manually'
       $retryBrowser = Wait-ForBrowserMod $currentMod $TimeoutSeconds
       Invoke-UiButton $retryBrowser.SlowButton 'Slow download'
+    } elseif ($action -eq 'retry-browser-after-vortex') {
+      $finalBrowserTried = $true
+      Write-Host 'Final browser manual-download retry after Vortex retry.' -ForegroundColor Yellow
+      Invoke-UiButton $link 'Start download manually'
     } else {
       throw "Handoff unverified for '$currentMod' ($action). No further retry; inspect Vortex and Opera."
     }
