@@ -13,7 +13,7 @@ This is a local PowerShell + Windows UI Automation script. It uses no LLM, API, 
 - If the mod remains stalled, tries the browser's **Start download manually** link up to three times using mouse-style messages at its current on-screen position. The first attempt sends up to three rapid clicks; later attempts send one. If the link changes during those clicks, it stops clicking and checks for handoff. After those attempts it retries through Vortex once. If the mod still matches and the link is visible, it makes one final browser retry, then stops if progress is still unverified. Repeated clicks may create duplicate requests.
 - Stops rather than guessing if a control is missing, the page/mod names do not match, or an unexpected login/CAPTCHA/error appears.
 
-It does not click Premium, skip a mod, endorse, install, or change browser permissions.
+The default flow does not click **Skip mod**. Neither flow clicks Premium, endorses, installs, or changes browser permissions.
 
 ## Setup
 
@@ -39,6 +39,21 @@ Open PowerShell in the project folder and use:
 ```
 
 Press **Ctrl+C** to stop a continuous run. Some waits use `-TimeoutSeconds` (90 seconds by default), while the handoff retry checks use shorter bounded waits. If Vortex has no manual-download dialog, the script stops without touching other controls. If PowerShell blocks scripts, a one-run alternative is `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\vortex-nexus-loop.ps1 -Once`; use `-Run` only after checking the one-item result.
+
+## Experimental skip flow (Opera)
+
+```powershell
+# Inspect without clicking
+.\vortex-nexus-loop.ps1 -Browser opera -SkipAfterSlowDownload
+
+# Try one item, then verify its archive in Vortex Downloads
+.\vortex-nexus-loop.ps1 -Browser opera -Once -SkipAfterSlowDownload
+
+# Only after the one-item check succeeds
+.\vortex-nexus-loop.ps1 -Browser opera -Run -SkipAfterSlowDownload
+```
+
+This mode clicks **Skip mod** after detecting the start of the Nexus countdown; it does not wait for the countdown to finish or click **Open Vortex**. If Opera ignores the automated click or the countdown cannot be read, the script pauses for a manual click and confirmation. Press Enter without typing `yes` to stop without skipping. The script stops on errors rather than restarting this mode. Queue advancement does not prove that the archive downloaded or that the mod installed.
 
 ## Tested environment
 

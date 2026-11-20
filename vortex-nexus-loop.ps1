@@ -1,8 +1,10 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
   [switch]$Once,
   [switch]$Run,
-  [ValidateRange(5,300)][int]$TimeoutSeconds = 90
+  [ValidateRange(5,300)][int]$TimeoutSeconds = 90,
+  [ValidateSet('', 'chrome', 'opera')][string]$Browser = '',
+  [switch]$SkipAfterSlowDownload
 )
 
 $ErrorActionPreference = 'Stop'
@@ -102,16 +104,35 @@ function Get-VortexState {
   }
   return [pscustomobject]@{
     Root = $app.Root; Elements = $elements; ManualButton = $manual
+    SkipButton = $(if ($SkipAfterSlowDownload -and $manual) {
+      $skipButtons = @(foreach ($element in $elements) {
+        try {
+          $info = $element.Current
+          if ($info.ControlType.ProgrammaticName -eq 'ControlType.Button' -and $info.Name -in @('Skip mod', 'Skip mode') -and $info.IsEnabled -and -not $info.IsOffscreen) { $element }
+        } catch {}
+      })
+      if ($skipButtons.Count -eq 1) { $skipButtons[0] }
+    })
     ModName = $modName; Counter = [string]$counter
   }
 }
 
 function Get-DefaultSupportedBrowser {
+  if ($Browser) { return $Browser }
   $key = 'HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice'
   $choice = Get-ItemProperty -Path $key -Name ProgId -ErrorAction SilentlyContinue
-  $browser = Get-SupportedBrowserFromProgId $choice.ProgId
-  if (-not $browser) { throw "The default HTTPS browser is unsupported or unknown (ProgId: '$($choice.ProgId)'). Set Chrome or Opera as the default and open it before running." }
-  return $browser
+  $detected = Get-SupportedBrowserFromProgId $choice.ProgId
+  if ($detected) { return $detected }
+
+  $candidates = @()
+  foreach ($name in @('chrome', 'opera')) {
+    $hasNexus = @(Get-Process -Name $name -ErrorAction SilentlyContinue |
+      Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -match '(?i)\bnexus\b' })
+    if ($hasNexus.Count -gt 0) { $candidates += $name }
+  }
+  if ($candidates.Count -eq 1) { return $candidates[0] }
+
+  throw "The default HTTPS browser is unsupported or unknown (ProgId: '$($choice.ProgId)'). Pass -Browser chrome or -Browser opera, or keep a Nexus tab active in one supported browser."
 }
 
 function Get-BrowserWindow([string]$ProcessName) {
@@ -136,7 +157,7 @@ function Get-BrowserWindow([string]$ProcessName) {
 }
 
 function Get-BrowserState {
-  if ((Get-DefaultSupportedBrowser) -ne $script:browserName) { throw 'The default browser changed during the run; stopping.' }
+  if ($script:enforceDefaultBrowser -and (Get-DefaultSupportedBrowser) -ne $script:browserName) { throw 'The default browser changed during the run; stopping.' }
   $app = Get-BrowserWindow $script:browserName
   $elements = @(Get-Descendants $app.Root)
   $names = @($elements | ForEach-Object { Get-ElementName $_ })
@@ -216,6 +237,68 @@ function Wait-ForNextMod([string]$PreviousMod, [string]$PreviousCounter, [int]$S
   return Get-VortexState
 }
 
+function Get-SlowDownloadCountdown($State) {
+  return [string]($State.Names | Where-Object { $_ -match '^\s*Your download will start in\b' } | Select-Object -First 1)
+}
+
+function Assert-SameDownloadPage($State, $Original, [string]$ModName) {
+  Assert-NoInterruption $State
+  if ($State.WindowHandle -ne $Original.WindowHandle -or $State.Title -notmatch '(?i)\bnexus\b' -or
+      -not (Test-TitleContainsModName $ModName $State.Title)) {
+    throw "Browser left the verified Nexus page for '$ModName'; not skipping."
+  }
+}
+
+function Invoke-SkipAfterSlowDownload($BrowserState, [string]$ModName, [string]$Counter) {
+  Assert-SameDownloadPage $BrowserState $BrowserState $ModName
+  $alreadyCounting = [bool](Get-SlowDownloadCountdown $BrowserState)
+  try { Invoke-UiButton $BrowserState.SlowButton 'Slow download' }
+  catch { Write-Warning $_.Exception.Message }
+
+  $confirmed = $false
+  # Verify that Opera accepted the action, not that the download finished.
+  for ($i = 0; $i -lt 8; $i++) {
+    $current = Get-BrowserState
+    Assert-SameDownloadPage $current $BrowserState $ModName
+    if (-not $alreadyCounting -and (Get-SlowDownloadCountdown $current)) { $confirmed = $true; break }
+    Start-Sleep -Milliseconds 250
+  }
+  if (-not $confirmed) {
+    Write-Warning "Browser did not confirm Slow download for '$ModName'. Check the page; click Slow download yourself only if it hasn't started."
+    if ((Read-Host 'Type yes once Nexus has accepted Slow download, or press Enter to stop') -ne 'yes') {
+      throw 'Slow download was not confirmed; nothing was skipped.'
+    }
+    Assert-SameDownloadPage (Get-BrowserState) $BrowserState $ModName
+  }
+
+  $vortex = Get-VortexState
+  if ($vortex.ModName -ne $ModName -or $vortex.Counter -ne $Counter) {
+    throw 'The Vortex item changed before Skip mod; nothing was skipped.'
+  }
+  if (-not $vortex.ManualButton -or -not $vortex.SkipButton) {
+    throw 'Cannot find a unique, visible Skip mod button for the current Vortex item.'
+  }
+  Invoke-UiButton $vortex.SkipButton 'Skip mod'
+  $isLast = ($Counter -match '^\s*(\d+)\s*/\s*(\d+)\s*$') -and ([int]$Matches[1] -eq [int]$Matches[2])
+  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+  do {
+    $next = Get-VortexState
+    if ($next.ManualButton -and (Test-VerifiedAdvance $ModName $Counter $next.ModName $next.Counter)) {
+      Write-Host "Vortex queue advanced to [$($next.Counter)] '$($next.ModName)'; archive completion not checked."
+      return $true
+    }
+    if ($isLast -and -not $next.ManualButton) {
+      Start-Sleep -Milliseconds 500
+      if (-not (Get-VortexState).ManualButton) {
+        Write-Host 'Final queue dialog closed; archive completion not checked.'
+        return $false
+      }
+    }
+    Start-Sleep -Milliseconds 250
+  } while ([DateTime]::UtcNow -lt $deadline)
+  throw "Vortex queue advancement was not verified after Skip mod for '$ModName'; not retrying."
+}
+
 function Invoke-OneCycle {
   $vortex = Get-VortexState
   if (-not $vortex.ManualButton) {
@@ -227,11 +310,15 @@ function Invoke-OneCycle {
   if ($vortex.Counter -notmatch '^\s*\d+\s*/\s*\d+\s*$') { throw 'Vortex queue counter could not be read; stopping before clicking.' }
   $currentMod = $vortex.ModName
   $currentCounter = $vortex.Counter
+  if ($SkipAfterSlowDownload -and -not $vortex.SkipButton) {
+    throw 'Cannot find a unique, visible Skip mod button for the current Vortex item.'
+  }
   Write-Host "Vortex current item [$($vortex.Counter)]: $currentMod"
   Invoke-UiButton $vortex.ManualButton 'Download manually'
 
   $browser = Wait-ForBrowserMod $currentMod $TimeoutSeconds
   Write-Host "Verified same mod in browser: $($browser.Title)"
+  if ($SkipAfterSlowDownload) { return (Invoke-SkipAfterSlowDownload $browser $currentMod $currentCounter) }
   Invoke-UiButton $browser.SlowButton 'Slow download'
 
   $result = Wait-ForHandoff $currentMod $currentCounter 8
@@ -299,29 +386,48 @@ function Invoke-OneCycle {
   return $true
 }
 
-try {
-  if ($Once -and $Run) { throw 'Choose either -Once or -Run, not both.' }
-  $script:browserName = Get-DefaultSupportedBrowser
-  $script:browserHandle = [IntPtr]::Zero
-  Write-Host "Detected default browser: $script:browserName"
-  $initialVortex = Get-VortexState
-  $initialBrowser = Get-BrowserState
-  Write-Host "Vortex: $($initialVortex.ModName) [$($initialVortex.Counter)]"
-  Write-Host "Browser: $($initialBrowser.Title)"
-  if (-not $Once -and -not $Run) {
-    Write-Host 'Inspection only; no clicks made. Use -Once for one item or -Run to continue until the Vortex manual-download dialog disappears.' -ForegroundColor Cyan
-    exit 0
-  }
-
-  $completed = 0
-  do {
-    $didCycle = Invoke-OneCycle
-    if (-not $didCycle) { break }
-    $completed++
-    if ($Once) { break }
-  } while ($Run)
-  Write-Host "Stopped after $completed completed cycle(s)." -ForegroundColor Green
-} catch {
-  Write-Error $_
+if ($Once -and $Run) {
+  Write-Error 'Choose either -Once or -Run, not both.'
   exit 1
+}
+
+$completed = 0
+while ($true) {
+  try {
+    $defaultChoice = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice' -Name ProgId -ErrorAction SilentlyContinue
+    $script:enforceDefaultBrowser = (-not $Browser) -and [bool](Get-SupportedBrowserFromProgId $defaultChoice.ProgId)
+    $script:browserName = Get-DefaultSupportedBrowser
+    $script:browserHandle = [IntPtr]::Zero
+    Write-Host "Using browser: $script:browserName"
+    $initialVortex = Get-VortexState
+    $initialBrowser = Get-BrowserState
+    Write-Host "Vortex: $($initialVortex.ModName) [$($initialVortex.Counter)]"
+    Write-Host "Browser: $($initialBrowser.Title)"
+    if ($SkipAfterSlowDownload) { Write-Host "Vortex Skip mod available: $([bool]$initialVortex.SkipButton)" }
+    if (-not $Once -and -not $Run) {
+      Write-Host 'Inspection only; no clicks made. Use -Once for one item or -Run to continue until the Vortex manual-download dialog disappears.' -ForegroundColor Cyan
+      exit 0
+    }
+
+    do {
+      $didCycle = Invoke-OneCycle
+      if (-not $didCycle) { break }
+      $completed++
+      if ($Once) { break }
+    } while ($Run)
+
+    if ($Run -and -not $SkipAfterSlowDownload -and -not $didCycle) {
+      Start-Sleep -Seconds 3
+      if ((Get-VortexState).ManualButton) { continue }
+    }
+    Write-Host "Stopped after $completed completed cycle(s)." -ForegroundColor Green
+    break
+  } catch {
+    if (-not $Run -or $SkipAfterSlowDownload) {
+      Write-Error $_
+      exit 1
+    }
+    Write-Warning "$($_.Exception.Message) — restarting from scratch in 5s..."
+    Start-Sleep -Seconds 5
+  }
 }
