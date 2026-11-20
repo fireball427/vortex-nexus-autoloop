@@ -33,11 +33,11 @@ function Get-ElementName($Element) {
   try { return [string]$Element.Current.Name } catch { return '' }
 }
 
-function Find-Button($Elements, [string]$Label) {
+function Find-Button($Elements, [string]$Label, [switch]$IncludeDisabled) {
   foreach ($element in $Elements) {
     try {
       if ($element.Current.ControlType.ProgrammaticName -eq 'ControlType.Button' -and
-          $element.Current.Name -eq $Label -and $element.Current.IsEnabled) {
+          $element.Current.Name -eq $Label -and ($IncludeDisabled -or $element.Current.IsEnabled)) {
         return $element
       }
     } catch {}
@@ -104,6 +104,7 @@ function Get-VortexState {
   }
   return [pscustomobject]@{
     Root = $app.Root; Elements = $elements; ManualButton = $manual
+    ManualDialogPresent = ($anchor -ge 0 -or [bool]$manual -or ($SkipAfterSlowDownload -and [bool](Find-Button $elements 'Download manually' -IncludeDisabled)))
     SkipButton = $(if ($SkipAfterSlowDownload -and $manual) {
       $skipButtons = @(foreach ($element in $elements) {
         try {
@@ -249,11 +250,36 @@ function Assert-SameDownloadPage($State, $Original, [string]$ModName) {
   }
 }
 
-function Invoke-SkipAfterSlowDownload($BrowserState, [string]$ModName, [string]$Counter) {
+function Wait-ForSkipQueue([string]$ModName, [string]$Counter, [int]$Seconds) {
+  $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+  while ($true) {
+    $next = Get-VortexState
+    $nextName = ([string]$next.ModName).Trim()
+    if (-not $ModName -and $next.ManualButton) { return [pscustomobject]@{ Kind = 'ready'; State = $next } }
+    if ($next.ManualButton -and $nextName -and $nextName -notmatch '^(?i:loading\s*\.{0,3}|free)$' -and $nextName -ne $ModName.Trim()) {
+      Write-Host "Vortex moved from '$ModName' to '$nextName' [$($next.Counter)]; archive completion not checked."
+      return [pscustomobject]@{ Kind = 'advanced'; State = $next }
+    }
+    if ([DateTime]::UtcNow -ge $deadline -and -not $next.ManualButton -and -not $next.ManualDialogPresent) {
+      Start-Sleep -Milliseconds 500
+      $next = Get-VortexState
+      if (-not $next.ManualButton -and -not $next.ManualDialogPresent) {
+        Write-Host 'No Download manually dialog remains; archive completion not checked.'
+        return [pscustomobject]@{ Kind = 'final'; State = $next }
+      }
+    }
+    if ([DateTime]::UtcNow -ge $deadline) { return [pscustomobject]@{ Kind = 'timeout'; State = $next } }
+    Start-Sleep -Milliseconds 250
+  }
+}
+
+function Invoke-SkipAfterSlowDownload($BrowserState, [string]$ModName, [string]$Counter, [bool]$IsRetry) {
   Assert-SameDownloadPage $BrowserState $BrowserState $ModName
   $alreadyCounting = [bool](Get-SlowDownloadCountdown $BrowserState)
-  try { Invoke-UiButton $BrowserState.SlowButton 'Slow download' }
-  catch { Write-Warning $_.Exception.Message }
+  if (-not ($IsRetry -and $alreadyCounting)) {
+    try { Invoke-UiButton $BrowserState.SlowButton 'Slow download' }
+    catch { Write-Warning $_.Exception.Message }
+  }
 
   $confirmed = $false
   # Verify that Opera accepted the action, not that the download finished.
@@ -272,53 +298,60 @@ function Invoke-SkipAfterSlowDownload($BrowserState, [string]$ModName, [string]$
   }
 
   $vortex = Get-VortexState
-  if ($vortex.ModName -ne $ModName -or $vortex.Counter -ne $Counter) {
+  if ($vortex.ModName -ne $ModName) {
     throw 'The Vortex item changed before Skip mod; nothing was skipped.'
   }
   if (-not $vortex.ManualButton -or -not $vortex.SkipButton) {
     throw 'Cannot find a unique, visible Skip mod button for the current Vortex item.'
   }
-  Invoke-UiButton $vortex.SkipButton 'Skip mod'
-  $isLast = ($Counter -match '^\s*(\d+)\s*/\s*(\d+)\s*$') -and ([int]$Matches[1] -eq [int]$Matches[2])
-  $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
-  do {
-    $next = Get-VortexState
-    if ($next.ManualButton -and (Test-VerifiedAdvance $ModName $Counter $next.ModName $next.Counter)) {
-      Write-Host "Vortex queue advanced to [$($next.Counter)] '$($next.ModName)'; archive completion not checked."
-      return $true
-    }
-    if ($isLast -and -not $next.ManualButton) {
-      Start-Sleep -Milliseconds 500
-      if (-not (Get-VortexState).ManualButton) {
-        Write-Host 'Final queue dialog closed; archive completion not checked.'
-        return $false
-      }
-    }
-    Start-Sleep -Milliseconds 250
-  } while ([DateTime]::UtcNow -lt $deadline)
-  throw "Vortex queue advancement was not verified after Skip mod for '$ModName'; not retrying."
+  try { Invoke-UiButton $vortex.SkipButton 'Skip mod' }
+  catch { Write-Warning $_.Exception.Message }
+  $progress = Wait-ForSkipQueue $ModName $Counter ([Math]::Min(10, $TimeoutSeconds))
+  if ($progress.Kind -ne 'timeout') { return ($progress.Kind -eq 'advanced') }
+
+  $current = $progress.State
+  if (-not $current.ManualButton -or $current.ModName -ne $ModName) {
+    throw "Vortex did not show verified advancement or the same actionable item; it is not safe to request a manual skip for '$ModName'."
+  }
+  if (-not $IsRetry) {
+    Write-Warning "Vortex still shows [$Counter] '$ModName'. Retrying Download manually once; archive completion is unknown."
+    return (Invoke-OneCycle -RetryItem $current)
+  }
+  if (-not $current.SkipButton) { throw "Skip mod is unavailable for '$ModName' after the retry." }
+  Write-Warning "Vortex has not advanced from [$Counter] '$ModName' after the retry."
+  $answer = Read-Host 'Only if Vortex still shows that exact item, click Skip mod once. Press Enter to check the queue, or type q to stop'
+  if ($answer -ne '') { throw 'Manual Skip recovery cancelled; inspect Vortex before restarting.' }
+  $progress = Wait-ForSkipQueue $ModName $Counter $TimeoutSeconds
+  if ($progress.Kind -ne 'timeout') { return ($progress.Kind -eq 'advanced') }
+  throw "Vortex queue advancement was not verified after manual Skip for '$ModName'; not retrying."
 }
 
-function Invoke-OneCycle {
+function Invoke-OneCycle($RetryItem = $null) {
   $vortex = Get-VortexState
+  if ($SkipAfterSlowDownload -and -not $vortex.ManualButton) {
+    $availability = Wait-ForSkipQueue '' '' ([Math]::Min(10, $TimeoutSeconds))
+    if ($availability.Kind -eq 'final') { return $false }
+    if ($availability.Kind -ne 'ready') { throw 'Vortex still has a download dialog, but Download manually is unavailable.' }
+    $vortex = $availability.State
+  }
+  if ($null -ne $RetryItem -and $vortex.ModName -ne $RetryItem.ModName) {
+    throw 'The Vortex item changed before the retry; no further click was sent.'
+  }
   if (-not $vortex.ManualButton) {
     Write-Host 'No Vortex "Download manually" dialog is present; stopping without clicking anything else.' -ForegroundColor Yellow
     return $false
   }
   if (-not $vortex.ModName) { throw 'Vortex showed the manual-download button but its mod name could not be read; stopping safely.' }
 
-  if ($vortex.Counter -notmatch '^\s*\d+\s*/\s*\d+\s*$') { throw 'Vortex queue counter could not be read; stopping before clicking.' }
+  if (-not $SkipAfterSlowDownload -and $vortex.Counter -notmatch '^\s*\d+\s*/\s*\d+\s*$') { throw 'Vortex queue counter could not be read; stopping before clicking.' }
   $currentMod = $vortex.ModName
   $currentCounter = $vortex.Counter
-  if ($SkipAfterSlowDownload -and -not $vortex.SkipButton) {
-    throw 'Cannot find a unique, visible Skip mod button for the current Vortex item.'
-  }
   Write-Host "Vortex current item [$($vortex.Counter)]: $currentMod"
   Invoke-UiButton $vortex.ManualButton 'Download manually'
 
   $browser = Wait-ForBrowserMod $currentMod $TimeoutSeconds
   Write-Host "Verified same mod in browser: $($browser.Title)"
-  if ($SkipAfterSlowDownload) { return (Invoke-SkipAfterSlowDownload $browser $currentMod $currentCounter) }
+  if ($SkipAfterSlowDownload) { return (Invoke-SkipAfterSlowDownload $browser $currentMod $currentCounter ($null -ne $RetryItem)) }
   Invoke-UiButton $browser.SlowButton 'Slow download'
 
   $result = Wait-ForHandoff $currentMod $currentCounter 8
@@ -394,6 +427,11 @@ if ($Once -and $Run) {
 $completed = 0
 while ($true) {
   try {
+    if ($Run -and $SkipAfterSlowDownload -and -not (Get-VortexState).ManualButton) {
+      $availability = Wait-ForSkipQueue '' '' ([Math]::Min(10, $TimeoutSeconds))
+      if ($availability.Kind -eq 'final') { break }
+      if ($availability.Kind -ne 'ready') { throw 'Vortex still has a download dialog, but Download manually is unavailable.' }
+    }
     $defaultChoice = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice' -Name ProgId -ErrorAction SilentlyContinue
     $script:enforceDefaultBrowser = (-not $Browser) -and [bool](Get-SupportedBrowserFromProgId $defaultChoice.ProgId)
     $script:browserName = Get-DefaultSupportedBrowser
@@ -423,9 +461,14 @@ while ($true) {
     Write-Host "Stopped after $completed completed cycle(s)." -ForegroundColor Green
     break
   } catch {
-    if (-not $Run -or $SkipAfterSlowDownload) {
+    if (-not $Run) {
       Write-Error $_
       exit 1
+    }
+    if ($SkipAfterSlowDownload) {
+      Write-Warning $_.Exception.Message
+      if ((Read-Host 'Inspect Vortex and the browser, then press Enter to recheck the queue, or type q to stop') -ne '') { exit 1 }
+      continue
     }
     Write-Warning "$($_.Exception.Message) — restarting from scratch in 5s..."
     Start-Sleep -Seconds 5
