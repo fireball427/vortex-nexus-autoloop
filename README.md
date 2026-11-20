@@ -48,4 +48,6 @@ On 20 November 2026, a Cyberpunk 2077 collection was tested on Windows 11 with V
 
 Experimental: the loop has completed multiple real downloads, but can stop if browser controls are off-screen or a handoff cannot be verified. Vortex or Opera may change focus during operation. Inspect the applications before restarting a stopped run; a download may still be in progress. An absent Vortex manual-download dialog does not necessarily mean the installation is complete.
 
+If Opera opens the correct mod page but the script cannot detect **Slow download**, try restarting Opera, then inspect the current Vortex and browser state before starting the script again. A restart restored the controls in one observed case; it may not fix every cause.
+
 Run the name-matching and retry-policy tests with `.\vortex-loop-core.Tests.ps1`. Run `.\vortex-mouse.Tests.ps1` to test mouse-message delivery to a local test window (the window briefly appears). These tests do not prove that Nexus accepted a download.
